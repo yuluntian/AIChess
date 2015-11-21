@@ -1,0 +1,517 @@
+
+package player;
+
+import player.list.*;
+import player.dict.*;
+
+/**
+ *  An implementation of a Network gameboard.  Keeps track of moves made on this gameboard by
+ *  both players.  Can determine the existance of a Network winning pattern and whether a move is valid.
+ *	The grid field is two dimentional array for Chip objects. It holds the chess pieces on the gameboard
+ *	and keeps the unoccupied positions null. The fields blacksize and whitesize keeps track of the number of 
+ *	black chess pieces and white chess pieces. The turn field keeps track of which player is making the move. The boardScores field is a hash table whose purpose is to store scores associated with
+ *	different board configurations.
+ *	The BLACK and WHITE fields are constants that indicate the integer representation of the black and white color on the gameboard.
+ *  The MAX_VALUE field and MIN_VALUE fields are the maximum and minimum scores to rate a gameboard.
+ *  The DIMENSION field is the width and also length of the square gameboard.
+ */
+public class Gameboard {
+
+	private Chip[][] grid;
+	protected int blackSize = 0;
+	protected int whiteSize = 0;
+	protected int turn = WHITE;
+	private HashTableChained boardScores = new HashTableChained();
+	protected final static int BLACK = 0;
+	protected final static int WHITE = 1;
+	protected static final int DIMENSION = 8;
+	protected static final int MAX_VALUE = 100000;
+    protected static final int MIN_VALUE = -100000;
+
+    // Constructs a gameboard with an empty eight by eight grid.
+	public Gameboard(){
+		grid=new Chip[DIMENSION][DIMENSION];
+	}
+	
+	// Constructs a cloned gameboard given an existing gameborad. Solely for the purpose of hash table.
+	public Gameboard(Gameboard board){
+		grid = new Chip[DIMENSION][DIMENSION];
+		for(int j = 0; j < DIMENSION; j++){
+			for(int i =0; i < DIMENSION; i++){
+				if(board.hasChip(i, j)){
+					addChip(new Chip(board.getChip(i, j), this));
+				}
+			}
+		}
+	}
+
+	// Alternates the player that makes the current move.
+	protected void changeTurn(){
+		turn = 1 - turn;
+	}
+
+	// Establish a chess piece on the gameboard using a Move object.
+	protected void setMove(Move m){
+		switch (m.moveKind){
+			case Move.ADD:
+				if(turn == WHITE){
+					grid[m.x1][m.y1] = new Chip(WHITE,m.x1,m.y1,this);
+					whiteSize++;						
+				}else{
+					grid[m.x1][m.y1] = new Chip(BLACK,m.x1,m.y1,this);
+					blackSize++;
+				}
+				break;
+			case Move.STEP:
+				Chip temp = removeChip(m.x2,m.y2);
+				temp.x = m.x1;
+				temp.y = m.y1;
+				addChip(temp);
+				break;
+		}
+		changeTurn();
+	}
+
+	// Removing a chess piece on the gameboard using a Move object.
+	protected void undo(Move m){
+		if(m.moveKind == Move.ADD){
+			removeChip(m.x1, m.y1);
+		}else if(m.moveKind == Move.STEP){
+			Chip c = removeChip(m.x1, m.y1);
+			c.x = m.x2;
+			c.y = m.y2;
+			addChip(c);
+		}
+		changeTurn();
+	}
+
+	// Determines whether the loation with x and y coordinates x and y refers to one corner.
+	protected boolean isCorner(int x, int y){
+		if (x==0||x==7) {
+			if (y==0||y==7) {
+				return true;
+			}
+		}
+		return false;
+	}	
+
+	// Determines whether a chess piece with a given color can be placed on the location
+	// specified by x and y coordinates.
+	protected boolean isValidForBoard(int x, int y, int color){
+		if(color == BLACK && (x == 0 || x == 7)){
+			return false;
+		}else if(color == WHITE && (y == 0 || y == 7)){
+			return false;
+		}
+		return !isCorner(x,y) && x>=0 && x<DIMENSION && y>=0 && y<DIMENSION;
+	}
+
+	// Determines whether a a chess piece with a given color can be added to the location
+	// specified by x and y coordinates.
+	private boolean isValidAdd(int x, int y, int color){
+		if (isValidForBoard(x, y, color)) {
+			if (!hasChip(x,y)) {
+				Chip c = new Chip(color, x, y, this);
+				addChip(c);
+				for (int j = y-1;j <= y+1 ;j++ ) {
+					for (int i = x-1;i <= x+1 ;i++ ) {
+						if (j>=0 && i>=0 && j<DIMENSION && i<DIMENSION) {
+							if (hasChip(i, j) && getChip(i, j).color == color) {
+								if (getChip(i, j).neighbours() > 2) {
+									removeChip(x, y);
+									return false;
+								}
+							}
+						}
+					}
+				}
+				removeChip(x, y);
+				return true;
+			}				
+		}
+		return false;	
+	}
+
+	// Determines whether a a chess piece with a given color can be used to perform a step move to the location
+	// specified by x and y coordinates from the previous location of x and y coordinates x1 and y1.
+	private boolean isValidStep(int x1, int y1, int x2, int y2, int color){
+		if(x1 == x2 && y1 == y2){
+			return false;
+		}else if(hasChip(x2, y2)){
+			Chip c = removeChip(x2, y2);
+			boolean result = isValidAdd(x1, y1, color);	
+			addChip(c);
+			return result;	
+		}else{
+			return false;
+		}		
+	}
+
+	// Determines whether a move, an add move or a step move, is valid given a Move object and the chess pieces' color.
+	protected boolean isValidMove(Move m, int color){
+		if (m.moveKind==Move.ADD) {
+			return isValidAdd(m.x1, m.y1, color);
+		}else if(m.moveKind==Move.STEP) {
+			return isValidStep(m.x1, m.y1, m.x2, m.y2, color);
+		}else {
+			return true;
+		}
+	}
+
+	// Provides all the valid moves on the gameboard for a given color.
+	protected Move[] allPossibleMoves(int color){
+		Move[] temp = null;;
+		SList options = new SList();
+		if(!hasRunout(color)){
+			for(int j = 0; j < DIMENSION; j++){
+				for(int i = 0; i < DIMENSION; i++){
+					Move m = new Move(i, j);
+					if(isValidMove(m, color)){
+						options.insertFront(m);
+					}
+				}
+			}
+		}else{
+			for(Chip c: allChips(color)){
+				for(int j = 0; j < DIMENSION; j++){
+					for(int i = 0; i < DIMENSION; i++){
+						Move m = new Move(i, j, c.x, c.y);
+						if(isValidMove(m, color)){
+							options.insertFront(m);
+						}
+					}
+				}
+			}
+		}
+		try{
+			temp = new Move[options.size()];
+			SListNode node = options.front();
+			for(int i = 0; i < temp.length; i++){
+				temp[i] = (Move)(node.item());
+				node = node.next();
+			}
+		}catch(Exception e){}
+		return temp;
+	}
+
+	// Determines whether there is a game-winnning Network pattering for a given color.
+	protected boolean hasNetwork(int color){
+		unMarkAll();
+		if (color==BLACK) {
+			for (int x=1;x<7;x++) {			
+				if (hasChip(x,0)) {
+					unMarkAll();
+					markThisRowExcept(BLACK,x);
+					if (findNetwork(-1,-1,x,0,BLACK, 1)) {
+					 	return true;
+					} 
+				} 
+			}
+		}else if (color == WHITE){
+			for (int y=1;y<7;y++) {
+				unMarkAll();				
+				if (hasChip(0,y)) {
+					markThisRowExcept(WHITE,y);
+					if (findNetwork(-1,-1,0,y,WHITE, 1)) {
+					 	return true;
+					} 
+				} 
+			}		
+		}
+		return false;
+	}
+
+	// Determines whether a Network winning pattern exists with the information of the previous location (defined by preX and preY) leading to
+	// the current location (defined by x and y) and the number of chess pieces in connection so far (defined by count).
+	private boolean findNetwork(int preX, int preY, int x, int y, int color, int count){
+		Chip point = getChip(x, y);
+
+		if(color == BLACK && y == 7){
+			if(count >= 6) return true;
+			return false;
+		}
+
+		if(color == WHITE && x == 7){
+			if(count >= 6) return true;
+			return false;
+		}
+			
+		point.mark();
+		SList connections = point.connections();
+				
+		
+		boolean validTurn = true;
+		SListNode node = connections.front();
+		while(node != null){
+			validTurn = true;
+			Chip next = (Chip)(node.item());
+			
+			if(preX != -1){
+				if(preX == x && x == next.x || preY == y && y == next.y || preX-x == preY-y && x-next.x == y-next.y){//check if the network changes direction
+					
+					validTurn = false;
+				}
+			}
+			//System.out.println("Next position: " + next + " and it's tag: " + next.isMarked() + " and the turn is valid: " + validTurn);
+			if(validTurn && !next.isMarked()){ 
+				//System.out.println("Going to find at position: " + x + " " + y);
+				if(findNetwork(x, y, next.x, next.y, color, count+1)){
+					return true;
+				}
+			}
+			node = node.next();
+		}
+
+		point.unmark();
+		return false;
+	}
+
+	//Returns all of the chips for the given color. 
+	private Chip[] allChips(int color){
+		int size = 0;
+		if(color == BLACK){
+			size = blackSize;
+		}else{
+			size = whiteSize;
+		}
+		Chip[] temp = new Chip[size];
+		int counter = 0;
+		for(int j=0; j<DIMENSION; j++){
+			for(int i=0; i<DIMENSION; i++){
+				if(hasChip(i, j)){
+					Chip add = getChip(i, j);
+					if(add.color == color){
+						temp[counter] = getChip(i, j);
+						counter++;
+					}
+				}
+			}
+		}
+		return temp;
+	}
+
+	//Returns whether or not the given position has a chip. 
+	protected boolean hasChip(int x, int y){
+		if (x>=0&&x<=7&&y>=0&&y<=7) {
+			return grid[x][y]!=null;	
+		}
+		return false;
+	}
+
+    //Returns the chip at position (x, y). If no chip is found, return null.
+	protected Chip getChip(int x, int y){
+		if (hasChip(x,y)) {
+			return grid[x][y];
+		}else {
+			return null;
+		}
+	}
+
+    //Removes and returns the position at index (x, y). If no chip is found, return null.
+	private Chip removeChip(int x, int y){
+		Chip c = null;
+		if(hasChip(x, y)){
+			c = getChip(x, y);
+			changeSize(c.color,-1);
+			grid[x][y]=null;
+		}
+		return c;
+	}
+
+    //Adds a chip c to "this" board, assuming the action is valid. 
+	private void addChip(Chip c){
+		if(hasChip(c.x, c.y) == false){
+			changeSize(c.color, 1);
+			grid[c.x][c.y] = c;
+		}
+	}
+
+    //Tests whether the given color has run out of chips.
+    //Returns true if the next move is STEP, false is the next move is ADD.
+	private boolean hasRunout(int color){
+		if (color==BLACK) {
+			return blackSize == 10;
+		}else if (color==WHITE) {
+			return whiteSize == 10;
+		}else {
+			return false;
+		}
+	}
+
+    //Changes the number of chips of the given colors by the given amount.
+	private void changeSize(int color, int amount){
+		if (color == BLACK) {
+			blackSize += amount;
+		}else if (color == WHITE) {
+			whiteSize += amount;
+		}
+	}
+
+    //Unmarks all chips in "this" board. 
+	private void unMarkAll(){
+		for (int x=0;x<DIMENSION ;x++ ) {
+			for (int y=0;y<DIMENSION ;y++ ) {
+				if (hasChip(x,y)) {
+					getChip(x,y).unmark();
+				}
+			}
+		}
+	}
+
+    //Marks all chips in the goal area (the top row for BLACK; the leftmost column for WHITE) except the chip at index x. 
+	private void markThisRowExcept(int color, int x){
+		if (color==BLACK) {
+			for (int i=1;i<7 ;i++ ) {
+				if (i!=x) {
+					if (hasChip(i,0)) {
+						getChip(i,0).mark();
+					}
+				}
+			}
+		}else if (color==WHITE) {
+			for (int i=1;i<7 ;i++ ) {
+				if (i!=x) {
+					if (hasChip(0,i)) {
+						getChip(0,i).mark();
+					}
+				}
+			}			
+		}
+	}
+
+	//Assign a numeric score to "this" board, for the input color.
+	public int evaluate(int color){
+		if(boardScores.find(this) != null){
+	      return ((Integer)(boardScores.find(this)).value()).intValue();
+	    }
+	    
+	    int score = 0;
+	    
+	    if(hasNetwork(color)){
+	    	return MAX_VALUE;
+	    }else if(hasNetwork(1 - color)){
+	    	return MIN_VALUE;
+	    }
+	    int myConnections = 0;
+	    int oppConnections = 0;
+	    for(Chip c: this.allChips(color)){
+	      myConnections += (c.connections()).size();
+	    }
+	    for(Chip d: this.allChips(1-color)){
+	      oppConnections += (d.connections()).size();
+	    }
+
+	    int c1 = checkGoalArea(color)[0];
+	    int c2 = checkGoalArea(color)[1];
+
+	    if(blackSize <= 3){
+	    	for(Chip c: allChips(color)){
+	    		if(c.x >= 3 && c.x <= 4 && c.y >= 3 && c.y <= 4 ){
+	    			score += 750;
+	    		}
+	    	}
+	    	if(c1 != 0 || c2 != 0){
+	    		score -= 75;
+	    	}
+	    }
+
+	    if(blackSize <= 4){
+	    	score -= 100*oppConnections;
+	    }else{
+	    	score = 40*myConnections - 60*oppConnections;
+	    }
+
+	    if(c1 > 3 || c2 > 3) score -= 75;
+	    
+	    boardScores.insert(new Gameboard(this), score);
+	    return score;
+	}
+
+	//Assigns an integer hash code to "this" board.
+	//Overrides Object.hashCode()
+	public int hashCode() {
+	    int value = 0;
+	    for(int j=0; j<DIMENSION; j++){
+	      for(int i = 0; i<DIMENSION; i++){
+	        if(hasChip(i, j)){
+	        	Chip c = getChip(i, j);
+	        	if(c.color == BLACK){
+	        		value = 3 * value + 1;
+	        	}else{
+	        		value = 3 * value + 2;
+	        	}
+	        }else{
+	        	value = 3 * value;
+	        }
+	      }
+	    }
+	    return value;
+  	}
+	
+	//Checks whether "this" board is equal with the given Object o.
+	//Overrides Object.equals(Object)
+	public boolean equals(Object o){
+		if(o instanceof Gameboard){
+			Gameboard board = (Gameboard)o;
+			for(int j = 0; j < DIMENSION; j++){
+				for(int i = 0; i < DIMENSION; i++){
+					if(hasChip(i, j)){
+						if(!board.hasChip(i, j) || !getChip(i, j).equals(board.getChip(i, j))){
+							return false;
+						}
+					}else{
+						if(board.hasChip(i, j)){
+							return false;
+						}
+					}
+				}
+			}
+			return true;
+		}else{
+			return false;
+		}
+	}
+
+	//A String representation of "this" game board.
+	//Overrides Object.toString()
+  	public String toString(){
+		String result="";
+		for (int y=0;y<DIMENSION ;y++ ) {
+			for (int x=0;x<DIMENSION ;x++ ) {
+				if (hasChip(x,y)) {
+				result += "| "+grid[x][y].toString()+" |";					
+				}else {
+				result += "|     |";	
+				}
+			}
+			result += y+"\n";
+		}
+		return result;
+	}
+
+	//Returns a pair of integers, each representing the number of chips in one of the goal areas. Used by evaluate to check if the game board
+	//has too many chips in goal areas.  
+	private int[] checkGoalArea(int color){
+		int c1 = 0;
+		int c2 = 0;
+
+		if(color == BLACK){
+			for(int i = 0; i < DIMENSION ; i++){
+				if(hasChip(i, 0)) c1++;
+			}
+			for(int i = 0; i < DIMENSION ; i++){
+				if(hasChip(i, 7)) c2++;
+			}
+		}else if(color == WHITE){
+			for(int i = 0; i < DIMENSION ; i++){
+				if(hasChip(0, i)) c1++;
+			}
+			for(int i = 0; i < DIMENSION ; i++){
+				if(hasChip(7, i)) c2++;
+			}
+		}
+		return new int[] {c1, c2};
+	}
+}
+
+
